@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini Mario Maker</title>
+<style>
+body{margin:0;background:#222;color:#fff;font-family:sans-serif}
+canvas{background:#87ceeb;display:block;margin:auto}
+#ui{
+ position:fixed;bottom:0;left:0;width:100%;
+ background:#000c;display:flex;flex-wrap:wrap;
+ justify-content:center;
+}
+button{font-size:18px;margin:4px;padding:10px 14px}
+#minimap{
+ position:fixed;right:10px;top:10px;
+ width:120px;height:80px;
+ background:#000a;border:2px solid #fff;
+ cursor:move;
+}
+</style>
+</head>
+<body>
+
+<canvas id="c" width="960" height="540"></canvas>
+<canvas id="minimap"></canvas>
+
+<div id="ui">
+  <button onclick="toggleEdit()">▶️ START / ✏️ EDIT</button>
+
+  <button onclick="mode='block'">🧱 ブロック</button>
+  <button onclick="mode='enemy'">👾 敵</button>
+  <button onclick="mode='fly'">🪽 空飛ぶ敵</button>
+  <button onclick="mode='fast'">⚡ 速い敵</button>
+  <button onclick="mode='boss'">🐲 ボス</button>
+  <button onclick="mode='goal'">🚩 ゴール</button>
+  <button onclick="mode='mid'">⭐ 中間</button>
+  <button onclick="mode='player'">🧍 プレイヤー</button>
+  <button onclick="mode='eraser'">🧽 消しゴム</button>
+
+  <button onclick="save()">💾 セーブ</button>
+  <button onclick="load()">📂 ロード</button>
+</div>
+
+<script>
+const c=document.getElementById("c"),ctx=c.getContext("2d");
+const m=document.getElementById("minimap"),mctx=m.getContext("2d");
+
+const T=24;
+const BOSS_SIZE=T*2;
+const MAX_LIFE=3;
+
+let isEdit=true,mode="block";
+let blocks=[],enemies=[],bosses=[],goal=null,mids=[];
+let cam=0,life=MAX_LIFE;
+
+let player={x:100,y:0,vx:0,vy:0,spawn:{x:100,y:0}};
+
+/* ===== EDIT / PLAY ===== */
+function toggleEdit(){
+ isEdit=!isEdit;
+ if(isEdit){
+  life=MAX_LIFE;
+  Object.assign(player,player.spawn,{vx:0,vy:0});
+ }
+}
+
+/* ===== SAVE / LOAD ===== */
+function save(){
+ localStorage.stage=JSON.stringify({blocks,enemies,bosses,goal,mids,player});
+}
+function load(){
+ let s=JSON.parse(localStorage.stage||"{}");
+ blocks=s.blocks||[];
+ enemies=s.enemies||[];
+ bosses=s.bosses||[];
+ goal=s.goal||null;
+ mids=s.mids||[];
+ if(s.player){
+  player=s.player;
+ }
+}
+
+/* ===== ミニマップ ドラッグ ===== */
+let drag=false,dx=0,dy=0;
+m.onmousedown=e=>{drag=true;dx=e.offsetX;dy=e.offsetY};
+onmouseup=_=>drag=false;
+onmousemove=e=>{
+ if(drag){
+  m.style.left=(e.clientX-dx)+"px";
+  m.style.top =(e.clientY-dy)+"px";
+ }
+};
+
+/* ===== 設置 ===== */
+c.onmousedown=e=>place(e);
+c.ontouchstart=e=>place(e);
+
+function place(e){
+ if(!isEdit)return;
+ let r=c.getBoundingClientRect();
+ let x=((e.touches?e.touches[0].clientX:e.clientX)-r.left+cam)/T|0;
+ let y=((e.touches?e.touches[0].clientY:e.clientY)-r.top)/T|0;
+ x*=T;y*=T;
+
+ if(mode=="block") blocks.push({x,y});
+
+ if(mode=="enemy")
+  enemies.push({x,y,type:"walk",dead:false,dir:1});
+
+ if(mode=="fly")
+  enemies.push({x,y,type:"fly",dead:false,baseY:y});
+
+ if(mode=="fast")
+  enemies.push({x,y,type:"fast",dead:false,dir:1,vy:0});
+
+ if(mode=="boss")
+  bosses.push({x,y,w:BOSS_SIZE,h:BOSS_SIZE,hp:3,vy:0});
+
+ if(mode=="goal")
+  goal={x,y};
+
+ if(mode=="mid")
+  mids.push({x,y});
+
+ if(mode=="player"){
+  player.x=x;
+  player.y=y;
+  player.spawn={x,y};
+ }
+
+ if(mode=="eraser"){
+  blocks=blocks.filter(b=>b.x!=x||b.y!=y);
+ }
+}
+
+/* ===== 操作 ===== */
+onkeydown=e=>{
+ if(e.key=="ArrowLeft") player.vx=-4;
+ if(e.key=="ArrowRight") player.vx=4;
+ if(e.key==" ") player.vy=-10;
+};
+onkeyup=_=>player.vx=0;
+
+/* ===== 当たり ===== */
+function hit(a,b){
+ let bw=b.w||T,bh=b.h||T;
+ return a.x<b.x+bw&&a.x+T>b.x&&a.y<b.y+bh&&a.y+T>b.y;
+}
+function respawn(d){
+ life-=d;
+ if(life<=0){
+  isEdit=true;
+  life=MAX_LIFE;
+ }
+ Object.assign(player,player.spawn,{vx:0,vy:0});
+ enemies.forEach(e=>e.dead=false);
+}
+
+/* ===== 更新 ===== */
+function update(){
+ if(isEdit)return;
+
+ player.vy+=0.6;
+ player.x+=player.vx;
+ player.y+=player.vy;
+
+ blocks.forEach(b=>{
+  if(hit(player,b)){player.y=b.y-T;player.vy=0;}
+ });
+
+ /* 敵AI */
+ enemies.forEach(e=>{
+  if(e.dead)return;
+
+  if(e.type=="walk"){
+   e.x+=e.dir*1.2;
+  }
+  if(e.type=="fly"){
+   e.x+=1.5;
+   e.y=e.baseY+Math.sin(Date.now()/300)*20;
+  }
+  if(e.type=="fast"){
+   e.x+=e.dir*2.6;
+   e.vy+=0.6;
+   e.y+=e.vy;
+   blocks.forEach(b=>{
+    if(hit(e,b)){e.y=b.y-T;e.vy=-8;}
+   });
+  }
+
+  if(hit(player,e)){
+   if(player.vy>0){e.dead=true;player.vy=-8;}
+   else respawn(1);
+  }
+ });
+
+ /* BOSS：近づく→ジャンプ */
+ bosses.forEach(b=>{
+  if(Math.abs(player.x-b.x)<200 && b.vy==0){
+   b.vy=-12;
+  }
+  b.vy+=0.6;
+  b.y+=b.vy;
+
+  blocks.forEach(bl=>{
+   if(hit(b,bl)){b.y=bl.y-b.h;b.vy=0;}
+  });
+
+  if(hit(player,b)){
+   if(player.vy>0){b.hp--;player.vy=-10;}
+   else respawn(2);
+  }
+ });
+
+ mids.forEach(m=>{
+  if(hit(player,m)){
+   player.spawn={x:m.x,y:m.y};
+  }
+ });
+
+ if(player.y>600) respawn(1);
+}
+
+/* ===== 描画 ===== */
+function draw(){
+ ctx.clearRect(0,0,c.width,c.height);
+ cam=player.x-200;
+
+ // ブロック
+ blocks.forEach(b=>{
+  ctx.fillStyle="#c68642";
+  ctx.fillRect(b.x-cam,b.y,T,T);
+ });
+
+ // 敵（目つきあり）
+ enemies.forEach(e=>{
+  if(e.dead)return;
+  let col="#7b3f00";
+  if(e.type=="fly") col="#ff9800";
+  if(e.type=="fast") col="#e91e63";
+  ctx.fillStyle=col;
+  ctx.fillRect(e.x-cam,e.y,T,T);
+  ctx.fillStyle="#fff";
+  ctx.fillRect(e.x-cam+5,e.y+6,4,4);
+  ctx.fillRect(e.x-cam+15,e.y+6,4,4);
+ });
+
+ // ボス
+ bosses.forEach(b=>{
+  ctx.fillStyle="#2e7d32";
+  ctx.fillRect(b.x-cam,b.y,b.w,b.h);
+  ctx.fillText("🐲",b.x-cam+10,b.y+30);
+ });
+
+ // ゴール
+ if(goal){
+  ctx.fillStyle="gold";
+  ctx.fillRect(goal.x-cam,goal.y,T,T*2);
+  ctx.fillText("🚩",goal.x-cam+2,goal.y+20);
+ }
+
+ // 中間
+ mids.forEach(m=>{
+  ctx.fillStyle="#00bcd4";
+  ctx.fillRect(m.x-cam,m.y,T,T);
+  ctx.fillText("⭐",m.x-cam+2,m.y+18);
+ });
+
+ // プレイヤー
+ ctx.fillStyle="blue";
+ ctx.fillRect(player.x-cam,player.y,T,T);
+
+ // LIFE
+ let hearts="";
+ for(let i=0;i<life;i++) hearts+="❤️";
+ ctx.fillStyle="#fff";
+ ctx.fillText("LIFE "+hearts,10,22);
+
+ /* ミニマップ */
+ mctx.clearRect(0,0,m.width,m.height);
+ const S=15;
+ blocks.forEach(b=>{mctx.fillStyle="#c68642";mctx.fillRect(b.x/S,b.y/S,3,3)});
+ enemies.forEach(e=>{if(!e.dead){mctx.fillStyle="red";mctx.fillRect(e.x/S,e.y/S,3,3)}});
+ bosses.forEach(b=>{mctx.fillStyle="purple";mctx.fillRect(b.x/S,b.y/S,5,5)});
+ mctx.fillStyle="blue";
+ mctx.fillRect(player.x/S,player.y/S,4,4);
+}
+
+function loop(){update();draw();requestAnimationFrame(loop);}
+loop();
+</script>
+</body>
+</html>
